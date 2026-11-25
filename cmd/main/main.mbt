@@ -43,9 +43,7 @@ fn main {
   )
 
   srv.register_resource_template(
-    "workspace://files/{path}",
-    "Workspace File Template",
-    "Dynamic URI template for workspace documents",
+    "workspace://files/{path}", "Workspace File Template", "Dynamic URI template for workspace documents",
     "text/plain",
   )
 
@@ -65,7 +63,7 @@ fn main {
       None => ()
     }
   }
-  println(
-    "Echo calls: \{srv.get_tool_call_count(\"echo\")}, Audit trail entries: \{srv.get_audit_log().length()}",
-  )
+  let echo_calls = srv.get_tool_call_count("echo")
+  let audit_len = srv.get_audit_log().length()
+  println("Echo calls: \{echo_calls}, Audit trail entries: \{audit_len}")
 }

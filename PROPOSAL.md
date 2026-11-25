@@ -32,4 +32,4 @@ Model Context Protocol（MCP）已成为 Claude Code、Cursor、Windsurf 等 AI 
 
 ## 8. GitHub 仓库链接
 - **仓库地址**：https://github.com/zhitongblog/moonbit-mcp-sdk
-- **仓库状态**：公开仓库，包含 12 个按功能模块逐步演进的有效 commits、19 项黑盒协议一致性测试（全部通过）及 WASM / JS 双目标编译验证。
+- **仓库状态**：公开仓库，包含 13 个按功能模块逐步演进的有效 commits、19 项黑盒协议一致性测试（全部通过）及 WASM / JS 双目标编译验证。
