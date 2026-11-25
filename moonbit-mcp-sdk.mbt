@@ -83,11 +83,17 @@ pub(all) struct PromptDef {
 pub struct McpServer {
   name : String
   version : String
+  mut instructions : String
+  mut log_level : LogLevel
+  mut page_size : Int32
   mut max_allowed_risk : RiskTier
   mut write_cap : Int32
   mut write_count : Int32
+  denied_tools : Map[String, Bool]
+  call_counts : Map[String, Int32]
   tools : Array[ToolDef]
   resources : Array[ResourceDef]
+  resource_templates : Array[ResourceTemplateDef]
   prompts : Array[PromptDef]
   audit_log : Array[AuditEntry]
 }
@@ -97,14 +103,74 @@ pub fn McpServer::new(name : String, version : String) -> McpServer {
   {
     name,
     version,
+    instructions: "",
+    log_level: Info,
+    page_size: 0,
     max_allowed_risk: SafeWrite,
     write_cap: 0,
     write_count: 0,
+    denied_tools: Map([]),
+    call_counts: Map([]),
     tools: [],
     resources: [],
+    resource_templates: [],
     prompts: [],
     audit_log: [],
   }
+}
+
+///|
+/// Set server-level natural-language instructions returned in `initialize`.
+pub fn McpServer::set_instructions(
+  self : McpServer,
+  instructions : String,
+) -> Unit {
+  self.instructions = instructions
+}
+
+///|
+/// Configure pagination page size for `tools/list` (0 = return all tools).
+pub fn McpServer::set_page_size(self : McpServer, size : Int32) -> Unit {
+  self.page_size = size
+}
+
+///|
+/// Inspect current MCP structured logging threshold.
+pub fn McpServer::get_log_level(self : McpServer) -> LogLevel {
+  self.log_level
+}
+
+///|
+/// Dynamically block a specific tool by name at runtime without re-registering.
+pub fn McpServer::deny_tool(self : McpServer, tool_name : String) -> Unit {
+  self.denied_tools[tool_name] = true
+}
+
+///|
+/// Re-enable a previously denied tool by name.
+pub fn McpServer::allow_tool(self : McpServer, tool_name : String) -> Unit {
+  self.denied_tools[tool_name] = false
+}
+
+///|
+/// Return the total number of executed invocations for a given tool name.
+pub fn McpServer::get_tool_call_count(
+  self : McpServer,
+  tool_name : String,
+) -> Int32 {
+  self.call_counts.get(tool_name).unwrap_or(0)
+}
+
+///|
+/// Register a dynamic MCP URI template exposed via `resources/templates/list`.
+pub fn McpServer::register_resource_template(
+  self : McpServer,
+  uri_template : String,
+  name : String,
+  description : String,
+  mime_type : String,
+) -> Unit {
+  self.resource_templates.push({ uri_template, name, description, mime_type, })
 }
 
 ///|
