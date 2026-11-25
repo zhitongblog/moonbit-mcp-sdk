@@ -344,3 +344,174 @@ test "invalid JSON, unknown methods, and unknown tools return standard JSON-RPC 
     .contains("-32602"),
   )
 }
+
+///|
+test "MCP 2025-03-26 negotiation and server instructions" {
+  let srv = build_demo_server()
+  srv.set_instructions("Use read-only tools first before mutating notes.")
+  let init_req = @moonbit-mcp-sdk.build_initialize_request(
+    70, "moonbit-cli", "0.2.0",
+  )
+  let raw_resp = srv.handle_json(init_req).unwrap()
+  assert_true(raw_resp.contains("\"protocolVersion\":\"2025-03-26\""))
+  assert_true(
+    raw_resp.contains("Use read-only tools first before mutating notes."),
+  )
+  match @moonbit-mcp-sdk.parse_client_response(raw_resp) {
+    @moonbit-mcp-sdk.Success(Json::Object(res)) =>
+      assert_true(res.get("serverInfo") is Some(_))
+    _ => fail("expected Success response from parse_client_response")
+  }
+}
+
+///|
+test "tools/list cursor pagination returns slices and nextCursor" {
+  let srv = build_demo_server()
+  srv.set_page_size(2)
+  let p1_req = @moonbit-mcp-sdk.build_list_request(71, "tools/list", None)
+  let p1 = srv.handle_json(p1_req).unwrap()
+  assert_true(p1.contains("\"word_count\""))
+  assert_true(p1.contains("\"save_note\""))
+  assert_true(p1.contains("\"nextCursor\":\"2\""))
+
+  let p2_req = @moonbit-mcp-sdk.build_list_request(72, "tools/list", Some("2"))
+  let p2 = srv.handle_json(p2_req).unwrap()
+  assert_true(p2.contains("\"danger_shell\""))
+  assert_true(p2.contains("\"always_fail\""))
+  assert_true(!p2.contains("nextCursor"))
+}
+
+///|
+test "per-tool denylist policy and invocation counters" {
+  let srv = build_demo_server()
+  srv.deny_tool("word_count")
+  let call_req = @moonbit-mcp-sdk.build_tools_call_request(
+    73,
+    "word_count",
+    @json.parse("{\"text\":\"hello moonbit\"}") catch {
+      _ => Json::null()
+    },
+  )
+  let blocked = srv.handle_json(call_req).unwrap()
+  assert_true(blocked.contains("Policy denylist blocked tool 'word_count'"))
+  assert_eq(srv.get_tool_call_count("word_count"), 0)
+
+  srv.allow_tool("word_count")
+  let ok = srv.handle_json(call_req).unwrap()
+  assert_true(ok.contains("words=2"))
+  assert_eq(srv.get_tool_call_count("word_count"), 1)
+}
+
+///|
+test "logging/setLevel updates threshold and filters severity" {
+  let srv = build_demo_server()
+  assert_eq(srv.get_log_level(), @moonbit-mcp-sdk.Info)
+  let ok = srv
+    .handle_json(
+      "{\"jsonrpc\":\"2.0\",\"id\":74,\"method\":\"logging/setLevel\",\"params\":{\"level\":\"warning\"}}",
+    )
+    .unwrap()
+  assert_true(ok.contains("\"result\":{}"))
+  assert_eq(srv.get_log_level(), @moonbit-mcp-sdk.Warning)
+  assert_true(
+    !@moonbit-mcp-sdk.should_emit_log(
+      srv.get_log_level(),
+      @moonbit-mcp-sdk.Info,
+    ),
+  )
+  assert_true(
+    @moonbit-mcp-sdk.should_emit_log(
+      srv.get_log_level(),
+      @moonbit-mcp-sdk.Error,
+    ),
+  )
+
+  let bad = srv
+    .handle_json(
+      "{\"jsonrpc\":\"2.0\",\"id\":75,\"method\":\"logging/setLevel\",\"params\":{\"level\":\"verbose\"}}",
+    )
+    .unwrap()
+  assert_true(bad.contains("-32602"))
+}
+
+///|
+test "resource templates list and URI template parameter matching" {
+  let srv = build_demo_server()
+  srv.register_resource_template(
+    "file:///workspace/{path}", "Workspace File", "Read project file by relative path",
+    "text/plain",
+  )
+  let resp = srv
+    .handle_json(
+      "{\"jsonrpc\":\"2.0\",\"id\":76,\"method\":\"resources/templates/list\"}",
+    )
+    .unwrap()
+  assert_true(resp.contains("file:///workspace/{path}"))
+
+  let matched = @moonbit-mcp-sdk.match_uri_template(
+    "file:///workspace/{path}", "file:///workspace/moon.mod.json",
+  )
+  match matched {
+    Some(params) => assert_eq(params.get("path"), Some("moon.mod.json"))
+    None => fail("expected URI template match")
+  }
+  assert_eq(
+    @moonbit-mcp-sdk.match_uri_template(
+      "file:///workspace/{path}", "https://example.com/a",
+    ),
+    None,
+  )
+}
+
+///|
+test "schema validator enforces enum, minLength, and maxLength constraints" {
+  let schema = @json.parse(
+    "{\"type\":\"object\",\"required\":[\"env\",\"code\"],\"properties\":{\"env\":{\"type\":\"string\",\"enum\":[\"dev\",\"prod\"]},\"code\":{\"type\":\"string\",\"minLength\":2,\"maxLength\":5}}}",
+  ) catch {
+    _ => Json::null()
+  }
+  let valid = @json.parse("{\"env\":\"prod\",\"code\":\"abc\"}") catch {
+    _ => Json::null()
+  }
+  assert_eq(@moonbit-mcp-sdk.validate_arguments(schema, valid), None)
+
+  let bad_enum = @json.parse("{\"env\":\"staging\",\"code\":\"abc\"}") catch {
+    _ => Json::null()
+  }
+  assert_true(
+    @moonbit-mcp-sdk.validate_arguments(schema, bad_enum)
+    .unwrap()
+    .contains("not in enum"),
+  )
+
+  let too_short = @json.parse("{\"env\":\"dev\",\"code\":\"a\"}") catch {
+    _ => Json::null()
+  }
+  assert_true(
+    @moonbit-mcp-sdk.validate_arguments(schema, too_short)
+    .unwrap()
+    .contains("minLength"),
+  )
+
+  let too_long = @json.parse("{\"env\":\"dev\",\"code\":\"abcdef\"}") catch {
+    _ => Json::null()
+  }
+  assert_true(
+    @moonbit-mcp-sdk.validate_arguments(schema, too_long)
+    .unwrap()
+    .contains("maxLength"),
+  )
+}
+
+///|
+test "client response parser decodes JSON-RPC errors and malformed payloads" {
+  let rpc_err = @moonbit-mcp-sdk.parse_client_response(
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}",
+  )
+  assert_eq(rpc_err, @moonbit-mcp-sdk.RpcError(-32601, "Method not found"))
+
+  match @moonbit-mcp-sdk.parse_client_response("{not-json") {
+    @moonbit-mcp-sdk.ProtocolError(_) => ()
+    _ => fail("expected ProtocolError")
+  }
+}
