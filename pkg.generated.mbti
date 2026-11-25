@@ -1,0 +1,114 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "zhitongblog/moonbit-mcp-sdk"
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn build_object_schema(Array[PropSpec]) -> @json.Json
+
+pub fn validate_arguments(@json.Json, @json.Json) -> String?
+
+// Errors
+
+// Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) struct AuditEntry {
+  method_name : String
+  target : String
+  allowed : Bool
+  risk_tier : String
+  note : String
+}
+
+pub struct McpServer {
+  name : String
+  version : String
+  mut max_allowed_risk : RiskTier
+  mut write_cap : Int32
+  mut write_count : Int32
+  tools : Array[ToolDef]
+  resources : Array[ResourceDef]
+  prompts : Array[PromptDef]
+  audit_log : Array[AuditEntry]
+}
+pub fn McpServer::export_audit_jsonl(Self) -> String
+pub fn McpServer::get_audit_log(Self) -> Array[AuditEntry]
+pub fn McpServer::handle_json(Self, String) -> String?
+pub fn McpServer::new(String, String) -> Self
+pub fn McpServer::register_prompt(Self, String, String, Array[PromptArg], (Map[String, String]) -> String) -> Unit
+pub fn McpServer::register_resource(Self, String, String, String, String, () -> ToolResult) -> Unit
+pub fn McpServer::register_tool(Self, String, String, @json.Json, RiskTier, (@json.Json) -> ToolResult) -> Unit
+pub fn McpServer::reset_write_count(Self) -> Unit
+pub fn McpServer::set_max_risk(Self, RiskTier) -> Unit
+pub fn McpServer::set_write_cap(Self, Int32) -> Unit
+pub fn McpServer::tool_count(Self) -> Int32
+
+#derive(Eq, @debug.Debug)
+pub(all) struct PromptArg {
+  name : String
+  description : String
+  required : Bool
+}
+
+pub(all) struct PromptDef {
+  name : String
+  description : String
+  arguments : Array[PromptArg]
+  renderer : (Map[String, String]) -> String
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) struct PropSpec {
+  name : String
+  kind : SchemaType
+  description : String
+  required : Bool
+}
+
+pub(all) struct ResourceDef {
+  uri : String
+  name : String
+  description : String
+  mime_type : String
+  reader : () -> ToolResult
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum RiskTier {
+  ReadOnly
+  SafeWrite
+  Privileged
+}
+pub fn RiskTier::label(Self) -> String
+pub fn RiskTier::rank(Self) -> Int32
+
+#derive(Eq, @debug.Debug)
+pub(all) enum SchemaType {
+  Str
+  Num
+  Bool
+  Obj
+  Arr
+}
+pub fn SchemaType::as_str(Self) -> String
+
+pub(all) struct ToolDef {
+  name : String
+  description : String
+  input_schema : @json.Json
+  risk_tier : RiskTier
+  handler : (@json.Json) -> ToolResult
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum ToolResult {
+  Ok(String)
+  Err(String)
+}
+
+// Type aliases
+
+// Traits
