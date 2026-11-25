@@ -7,7 +7,19 @@ import {
 }
 
 // Values
+pub fn build_initialize_request(Int32, String, String) -> String
+
+pub fn build_list_request(Int32, String, String?) -> String
+
 pub fn build_object_schema(Array[PropSpec]) -> @json.Json
+
+pub fn build_tools_call_request(Int32, String, @json.Json) -> String
+
+pub fn match_uri_template(String, String) -> Map[String, String]?
+
+pub fn parse_client_response(String) -> ClientResponse
+
+pub fn should_emit_log(LogLevel, LogLevel) -> Bool
 
 pub fn validate_arguments(@json.Json, @json.Json) -> String?
 
@@ -23,26 +35,59 @@ pub(all) struct AuditEntry {
   note : String
 }
 
+#derive(Eq, @debug.Debug)
+pub(all) enum ClientResponse {
+  Success(@json.Json)
+  RpcError(Int32, String)
+  ProtocolError(String)
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum LogLevel {
+  Debug
+  Info
+  Notice
+  Warning
+  Error
+  Critical
+}
+pub fn LogLevel::as_str(Self) -> String
+pub fn LogLevel::parse(String) -> Self?
+pub fn LogLevel::severity(Self) -> Int32
+
 pub struct McpServer {
   name : String
   version : String
+  mut instructions : String
+  mut log_level : LogLevel
+  mut page_size : Int32
   mut max_allowed_risk : RiskTier
   mut write_cap : Int32
   mut write_count : Int32
+  denied_tools : Map[String, Bool]
+  call_counts : Map[String, Int32]
   tools : Array[ToolDef]
   resources : Array[ResourceDef]
+  resource_templates : Array[ResourceTemplateDef]
   prompts : Array[PromptDef]
   audit_log : Array[AuditEntry]
 }
+pub fn McpServer::allow_tool(Self, String) -> Unit
+pub fn McpServer::deny_tool(Self, String) -> Unit
 pub fn McpServer::export_audit_jsonl(Self) -> String
 pub fn McpServer::get_audit_log(Self) -> Array[AuditEntry]
+pub fn McpServer::get_log_level(Self) -> LogLevel
+pub fn McpServer::get_tool_call_count(Self, String) -> Int32
 pub fn McpServer::handle_json(Self, String) -> String?
 pub fn McpServer::new(String, String) -> Self
 pub fn McpServer::register_prompt(Self, String, String, Array[PromptArg], (Map[String, String]) -> String) -> Unit
 pub fn McpServer::register_resource(Self, String, String, String, String, () -> ToolResult) -> Unit
+pub fn McpServer::register_resource_template(Self, String, String, String, String) -> Unit
 pub fn McpServer::register_tool(Self, String, String, @json.Json, RiskTier, (@json.Json) -> ToolResult) -> Unit
 pub fn McpServer::reset_write_count(Self) -> Unit
+pub fn McpServer::set_instructions(Self, String) -> Unit
 pub fn McpServer::set_max_risk(Self, RiskTier) -> Unit
+pub fn McpServer::set_page_size(Self, Int32) -> Unit
 pub fn McpServer::set_write_cap(Self, Int32) -> Unit
 pub fn McpServer::tool_count(Self) -> Int32
 
@@ -74,6 +119,14 @@ pub(all) struct ResourceDef {
   description : String
   mime_type : String
   reader : () -> ToolResult
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) struct ResourceTemplateDef {
+  uri_template : String
+  name : String
+  description : String
+  mime_type : String
 }
 
 #derive(Eq, @debug.Debug)

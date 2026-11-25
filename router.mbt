@@ -42,30 +42,93 @@ fn get_string_field(obj : Map[String, Json], key : String) -> String? {
 }
 
 ///|
-fn McpServer::handle_initialize(self : McpServer, id : Json) -> String {
+fn McpServer::handle_initialize(
+  self : McpServer,
+  id : Json,
+  params : Json?,
+) -> String {
+  let requested = match params {
+    Some(Json::Object(m)) => get_string_field(m, "protocolVersion")
+    _ => None
+  }
+  let negotiated = match requested {
+    Some("2025-03-26") => "2025-03-26"
+    _ => "2024-11-05"
+  }
   let caps = json_obj([
     ("tools", json_obj([])),
     ("resources", json_obj([])),
     ("prompts", json_obj([])),
+    ("logging", json_obj([])),
   ])
   let info = json_obj([
     ("name", Json::string(self.name)),
     ("version", Json::string(self.version)),
   ])
-  json_ok(
-    id,
-    json_obj([
-      ("protocolVersion", Json::string("2024-11-05")),
-      ("capabilities", caps),
-      ("serverInfo", info),
-    ]),
-  )
+  let fields : Array[(String, Json)] = [
+    ("protocolVersion", Json::string(negotiated)),
+    ("capabilities", caps),
+    ("serverInfo", info),
+  ]
+  if !self.instructions.is_empty() {
+    fields.push(("instructions", Json::string(self.instructions)))
+  }
+  json_ok(id, json_obj(fields))
 }
 
 ///|
-fn McpServer::handle_tools_list(self : McpServer, id : Json) -> String {
+fn parse_nonneg_int(s : String) -> Int32 {
+  if s.is_empty() {
+    return 0
+  }
+  let mut acc = 0
+  for ch in s {
+    let code = ch.to_int()
+    if code >= 48 && code <= 57 {
+      acc = acc * 10 + (code - 48)
+    } else {
+      return 0
+    }
+  }
+  acc
+}
+
+///|
+fn parse_cursor_offset(params : Json?) -> Int32 {
+  match params {
+    Some(Json::Object(m)) =>
+      match get_string_field(m, "cursor") {
+        Some(c) => parse_nonneg_int(c)
+        None => 0
+      }
+    _ => 0
+  }
+}
+
+///|
+fn McpServer::handle_tools_list(
+  self : McpServer,
+  id : Json,
+  params : Json?,
+) -> String {
+  let offset = parse_cursor_offset(params)
+  let total = self.tools.length()
+  let start = if offset < 0 {
+    0
+  } else if offset > total {
+    total
+  } else {
+    offset
+  }
+  let end = if self.page_size > 0 && start + self.page_size < total {
+    start + self.page_size
+  } else {
+    total
+  }
   let arr : Array[Json] = []
-  for t in self.tools {
+  let mut idx = start
+  while idx < end {
+    let t = self.tools[idx]
     let annotations = json_obj([
       ("readOnlyHint", Json::boolean(t.risk_tier == ReadOnly)),
       ("destructiveHint", Json::boolean(t.risk_tier == Privileged)),
@@ -79,8 +142,13 @@ fn McpServer::handle_tools_list(self : McpServer, id : Json) -> String {
         ("annotations", annotations),
       ]),
     )
+    idx = idx + 1
   }
-  json_ok(id, json_obj([("tools", Json::array(arr))]))
+  let res_fields : Array[(String, Json)] = [("tools", Json::array(arr))]
+  if end < total {
+    res_fields.push(("nextCursor", Json::string(end.to_string())))
+  }
+  json_ok(id, json_obj(res_fields))
 }
 
 ///|
@@ -104,6 +172,25 @@ fn McpServer::handle_tools_call(
 
   for t in self.tools {
     if t.name == tool_name {
+      // 0. Per-tool denylist policy check
+      if self.denied_tools.get(tool_name).unwrap_or(false) {
+        let msg = "Policy denylist blocked tool '\{tool_name}'"
+        self.audit_log.push({
+          method_name: "tools/call",
+          target: tool_name,
+          allowed: false,
+          risk_tier: t.risk_tier.label(),
+          note: msg,
+        })
+        let content = Json::array([
+          json_obj([("type", Json::string("text")), ("text", Json::string(msg))]),
+        ])
+        return json_ok(
+          id,
+          json_obj([("content", content), ("isError", Json::boolean(true))]),
+        )
+      }
+
       // 1. Enforce Action Gateway risk tier ceiling
       if t.risk_tier.rank() > self.max_allowed_risk.rank() {
         let msg = "Action Gateway blocked tool '\{tool_name}' (risk=\{t.risk_tier.label()} > ceiling=\{self.max_allowed_risk.label()})"
@@ -165,6 +252,8 @@ fn McpServer::handle_tools_call(
       if t.risk_tier != ReadOnly {
         self.write_count = self.write_count + 1
       }
+      self.call_counts[tool_name] = self.call_counts.get(tool_name).unwrap_or(0) +
+        1
 
       match (t.handler)(args) {
         Ok(text) => {
@@ -356,6 +445,48 @@ fn McpServer::handle_prompts_get(
 }
 
 ///|
+fn McpServer::handle_resource_templates_list(
+  self : McpServer,
+  id : Json,
+) -> String {
+  let arr : Array[Json] = []
+  for tpl in self.resource_templates {
+    arr.push(
+      json_obj([
+        ("uriTemplate", Json::string(tpl.uri_template)),
+        ("name", Json::string(tpl.name)),
+        ("description", Json::string(tpl.description)),
+        ("mimeType", Json::string(tpl.mime_type)),
+      ]),
+    )
+  }
+  json_ok(id, json_obj([("resourceTemplates", Json::array(arr))]))
+}
+
+///|
+fn McpServer::handle_logging_set_level(
+  self : McpServer,
+  id : Json,
+  params : Json?,
+) -> String {
+  let p_obj = match params {
+    Some(Json::Object(m)) => m
+    _ => return json_err(id, -32602, "Invalid params: expected object")
+  }
+  let lvl_str = match get_string_field(p_obj, "level") {
+    Some(s) => s
+    None => return json_err(id, -32602, "Invalid params: missing 'level'")
+  }
+  match LogLevel::parse(lvl_str) {
+    Some(lvl) => {
+      self.log_level = lvl
+      json_ok(id, json_obj([]))
+    }
+    None => json_err(id, -32602, "Unknown log level: " + lvl_str)
+  }
+}
+
+///|
 fn McpServer::dispatch_object(
   self : McpServer,
   obj : Map[String, Json],
@@ -379,14 +510,16 @@ fn McpServer::dispatch_object(
   let params = obj.get("params")
 
   let resp = match method_name {
-    "initialize" => self.handle_initialize(id)
+    "initialize" => self.handle_initialize(id, params)
     "ping" => json_ok(id, json_obj([]))
-    "tools/list" => self.handle_tools_list(id)
+    "tools/list" => self.handle_tools_list(id, params)
     "tools/call" => self.handle_tools_call(id, params)
     "resources/list" => self.handle_resources_list(id)
     "resources/read" => self.handle_resources_read(id, params)
+    "resources/templates/list" => self.handle_resource_templates_list(id)
     "prompts/list" => self.handle_prompts_list(id)
     "prompts/get" => self.handle_prompts_get(id, params)
+    "logging/setLevel" => self.handle_logging_set_level(id, params)
     _ => json_err(id, -32601, "Method not found: " + method_name)
   }
   Some(resp)
