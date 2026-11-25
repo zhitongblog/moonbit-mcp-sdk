@@ -96,12 +96,12 @@ pub fn validate_arguments(schema : Json, args : Json) -> String? {
     _ => ()
   }
 
-  // 2. Check declared property types
+  // 2. Check declared property types, enum constraints & string length bounds
   match s_obj.get("properties") {
     Some(Json::Object(prop_map)) =>
       for key, val in a_obj {
         match prop_map.get(key) {
-          Some(Json::Object(spec)) =>
+          Some(Json::Object(spec)) => {
             match get_string_field(spec, "type") {
               Some(expected_ty) =>
                 if !json_matches_type(val, expected_ty) {
@@ -111,6 +111,35 @@ pub fn validate_arguments(schema : Json, args : Json) -> String? {
                 }
               None => ()
             }
+            match (val, spec.get("enum")) {
+              (Json::String(s), Some(Json::Array(allowed))) => {
+                let mut found = false
+                for item in allowed {
+                  if item == Json::string(s) {
+                    found = true
+                  }
+                }
+                if !found {
+                  return Some("argument '\{key}' value '\{s}' not in enum")
+                }
+              }
+              _ => ()
+            }
+            match (val, spec.get("minLength")) {
+              (Json::String(s), Some(Json::Number(n, ..))) =>
+                if s.length() < n.to_int() {
+                  return Some("argument '\{key}' shorter than minLength")
+                }
+              _ => ()
+            }
+            match (val, spec.get("maxLength")) {
+              (Json::String(s), Some(Json::Number(n, ..))) =>
+                if s.length() > n.to_int() {
+                  return Some("argument '\{key}' exceeds maxLength")
+                }
+              _ => ()
+            }
+          }
           _ => ()
         }
       }
